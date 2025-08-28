@@ -51,3 +51,7 @@ Perform directional sorting, which requires modifying the file paths in the code
 Connect to form scaffolds.
 
 `python lianjie1.py path/binpai4.out scaffolds.fasta`
+
+# 5.Dataset
+
+The dataset can be found in the paper and via the link: [Dataset](https://github.com/Suquana/PHScsffolding-Dataset).
