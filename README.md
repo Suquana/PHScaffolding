@@ -10,6 +10,6 @@ python 3.8.12,numpy 1.24.4,scipy 1.10.1
 ## 2.Install required packages
 `conda install numpy,scipy`
 ## 3.Clone the repository
-`git clone https://github.com/`
+`git clone https://github.com/Suquana/PHScaffolding`
 
 `cd PHScaffolding`
