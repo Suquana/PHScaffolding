@@ -1,7 +1,7 @@
 # PHScaffolding
 Scaffolding method based on Pore-C reads and hypergraph approach
 # Requirements
-python 3.8.12,numpy 1.24.4,scipy 1.10.1,falign,g++
+python 3.8.12,numpy 1.24.4,scipy 1.10.1,g++
 # Installation
 ## 1.Create a virtual environment
 `conda create -n PHScaffolding python=3.8`
@@ -20,38 +20,14 @@ Modify the contig names in the contig file to facilitate assembly (requires modi
 
 `python gaiming.py`
 
-Use Falign to align the Pore-C data with the contig file to generate a `.map` file.
+Use Falign to align the Pore-C data with the contig file to generate a paf file.You need to ensure that you already have the aligned paf files and the original contig files.(The usage of Falign can be found at: https://github.com/xiaochuanle/Falign)
 
-`g++ smap.cpp -o samp`
+Run the code
 
-Generate a contig length file, with the input being a contig file.
+`python main`
 
-`python line.py`
-
-Process the alignment file.
-
-`./smap path/xxx.map path/smap.txt`
-
-Modify the paths in tiqu.py to generate an extraction file, with the input file being a `.map` file.
-
-`python tiqu.py path/xxx.map path/tiqu.txt`
-
-Generate a hypergraph file by modifying the file paths within it. Set the input path to samp.txt, and output a hypergraph file. 
-
-`pyhton chap2.py`
-
-Hypergraph clustering partition, modify the file paths inside, requires a hypergraph file as input, and the juzhen output can be ignored.
-
-`python chaobian5.py`
-
-Perform directional sorting, which requires modifying the file paths in the code. The inputs needed are a contig length file, a hypergraph clustering file, and an `tiqu.txt` file.
-
-`python binpai4.py`
-
-Connect to form scaffolds.
-
-`python lianjie1.py path/binpai4.out scaffolds.fasta`
+After sequentially entering the PAF file path, contig file path, and output directory path, the assembly results will be generated.
 
 # 5.Dataset
 
-The dataset can be found in the paper and via the link: [Dataset](https://github.com/Suquana/PHScsffolding-Dataset).
+The dataset and test data can be found and downloaded at the following link: https://github.com/Suquana/PHScaffolding-Dataset​
