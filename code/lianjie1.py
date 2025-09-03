@@ -1,6 +1,7 @@
-import sys
+import argparse
 import os
 import logging
+import sys
 
 def main():
     # 配置日志
@@ -11,41 +12,42 @@ def main():
     )
     logger = logging.getLogger(__name__)
     
-    # 验证命令行参数
-    if len(sys.argv) != 4:
-        logger.error("用法: python lianjie1.py <contig_file> <order_file> <output_file>")
-        logger.error("功能: 根据排序文件构建scaffold序列")
-        sys.exit(1)
+    # 使用argparse解析参数
+    parser = argparse.ArgumentParser(description='根据排序文件构建scaffold序列')
+    parser.add_argument('contig_file', help='Contig FASTA文件路径')
+    parser.add_argument('order_file', help='排序文件路径')
+    parser.add_argument('output_file', help='输出scaffold FASTA文件路径')
+    parser.add_argument('--gap_length', type=int, default=500, 
+                        help='两个contig之间的N碱基数量 (默认: 500)')
     
-    contig_file = sys.argv[1]
-    order_file = sys.argv[2]
-    output_file = sys.argv[3]
+    args = parser.parse_args()
     
     logger.info(f"开始构建scaffold序列")
-    logger.info(f"输入contig文件: {contig_file}")
-    logger.info(f"输入排序文件: {order_file}")
-    logger.info(f"输出scaffold文件: {output_file}")
+    logger.info(f"输入contig文件: {args.contig_file}")
+    logger.info(f"输入排序文件: {args.order_file}")
+    logger.info(f"输出scaffold文件: {args.output_file}")
+    logger.info(f"使用间隙长度: {args.gap_length} Ns")
     
     # 检查输入文件是否存在
-    if not os.path.exists(contig_file):
-        logger.error(f"错误: contig文件 '{contig_file}' 不存在")
+    if not os.path.exists(args.contig_file):
+        logger.error(f"错误: contig文件 '{args.contig_file}' 不存在")
         sys.exit(1)
     
-    if not os.path.exists(order_file):
-        logger.error(f"错误: 排序文件 '{order_file}' 不存在")
+    if not os.path.exists(args.order_file):
+        logger.error(f"错误: 排序文件 '{args.order_file}' 不存在")
         sys.exit(1)
     
     try:
         # 读取contig序列
         logger.info("开始读取contig文件...")
-        contigs = read_contigs(contig_file)
+        contigs = read_contigs(args.contig_file)
         logger.info(f"成功读取 {len(contigs)} 个contig序列")
         
         # 处理排序文件并生成scaffold
         logger.info("开始处理排序文件并生成scaffold...")
-        process_order(order_file, contigs, output_file, logger)
+        process_order(args.order_file, contigs, args.output_file, logger, args.gap_length)
         
-        logger.info(f"scaffold构建完成! 结果已保存至 {output_file}")
+        logger.info(f"scaffold构建完成! 结果已保存至 {args.output_file}")
     except Exception as e:
         logger.error(f"处理过程中发生错误: {str(e)}")
         sys.exit(1)
@@ -91,12 +93,11 @@ def read_contigs(contig_file):
     
     return contigs
 
-def process_order(order_file, contigs, output_file, logger):
+def process_order(order_file, contigs, output_file, logger, gap_length=500):
     """处理排序文件并生成scaffold序列"""
     scaffold_num = 0
     total_groups = 0
     total_bases = 0
-    gap_length = 10  # 两个contig之间的N个数
     
     with open(order_file, 'r') as f, open(output_file, 'w') as out:
         for line_num, line in enumerate(f, 1):
