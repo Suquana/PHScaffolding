@@ -24,9 +24,11 @@ Use Falign to align the Pore-C data with the contig file to generate a paf file.
 
 Run the code
 
-`python main`
+`python main.py --paf path/map.paf --contig path/contig.fasta --output_dir path/output -q 50.0 -r 1.0 --min_w 20.0 --drop_w 0.3 --gap 500`
 
 After sequentially entering the PAF file path, contig file path, and output directory path, the assembly results will be generated.
+
+Use `python main.py -h` to view command line arguments.
 
 # 5.Dataset
 
