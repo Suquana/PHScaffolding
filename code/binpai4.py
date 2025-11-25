@@ -1,522 +1,229 @@
 import os
-import sys
 import math
 import numpy as np
-import argparse
 from collections import defaultdict
-from itertools import combinations
-import logging
+import time
+import argparse  # 添加argparse支持
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
-logger = logging.getLogger(__name__)
+# ====================== 配置区（通过命令行参数覆盖） ======================
+
+CONFIG = {
+    # 输入文件路径（将通过命令行参数设置）
+    "contig_file": "",
+    "partition_file": "",
+    "alignment_file": "",
+
+    # 输出文件路径（将通过命令行参数设置）
+    "output_final_links": "",
+    "output_contig_weights": "",
+
+    # 阶段参数配置（固定配置，不需要命令行参数）
+    "bin_configs": [
+        {"bin_length": 400, "front_bins": 5, "back_bins": 5,
+         "coverage_weight_factor": 1, "similarity_weight_factor": 1},
+        {"bin_length": 1000, "front_bins": 5, "back_bins": 5,
+         "coverage_weight_factor": 1, "similarity_weight_factor": 1},
+        {"bin_length": 2000, "front_bins": 5, "back_bins": 5,
+         "coverage_weight_factor": 1, "similarity_weight_factor": 1},
+        {"bin_length": 5000, "front_bins": 5, "back_bins": 5,
+         "coverage_weight_factor": 1, "similarity_weight_factor": 1},
+        {"bin_length": 10000, "front_bins": 5, "back_bins": 5,
+         "coverage_weight_factor": 1, "similarity_weight_factor": 1},
+        {"bin_length": 20000, "front_bins": 5, "back_bins": 5,
+         "coverage_weight_factor": 1, "similarity_weight_factor": 1},
+    ],
+
+    # 图构建参数（可通过命令行参数覆盖）
+    "weight_drop_threshold": 0.3,
+    "min_edge_weight_similarity": 10,
+    "min_edge_weight_coverage": 15,
+    "similarity_boost": 100000.0,
+}
+
+# ====================== 工具函数 ======================
 
 class UnionFind:
     def __init__(self):
         self.parent = {}
-    
-    def add(self, item):
-        if item not in self.parent:
-            self.parent[item] = item
-    
+
     def find(self, item):
-        if item not in self.parent:
-            self.add(item)
         if self.parent[item] != item:
             self.parent[item] = self.find(self.parent[item])
         return self.parent[item]
 
     def union(self, a, b):
-        root_a = self.find(a)
-        root_b = self.find(b)
-        if root_a != root_b:
-            self.parent[root_b] = root_a
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self.parent[rb] = ra
             return True
         return False
 
-def main():
-    # 创建命令行参数解析器
-    parser = argparse.ArgumentParser(description='连接图构建算法')
-    parser.add_argument('contig_file', help='contig长度文件路径')
-    parser.add_argument('partition_file', help='分区文件路径')
-    parser.add_argument('alignment_file', help='比对文件路径')
-    parser.add_argument('sorted_connections_file', help='排序连接输出文件路径')
-    parser.add_argument('max_connections_file', help='最大连接输出文件路径')
-    parser.add_argument('connection_steps_file', help='连接步骤输出文件路径')
-    parser.add_argument('--min_edge_weight', type=float, default=20.0,
-                        help='最小边权重阈值 (默认: 20.0)')
-    parser.add_argument('--weight_drop_threshold', type=float, default=0.3,
-                        help='权重下降断开阈值 (默认: 0.3)')
-    parser.add_argument('--verbose', action='store_true', help='显示详细日志')
-    
-    # 解析命令行参数
-    args = parser.parse_args()
-    
-    # 设置日志级别
-    if args.verbose:
-        logger.setLevel(logging.DEBUG)
-    
-    # 验证输入文件存在
-    for path in [args.contig_file, args.partition_file, args.alignment_file]:
-        if not os.path.exists(path):
-            logger.error(f"错误: 输入文件 '{path}' 不存在")
-            sys.exit(1)
-    
-    # 定义bin配置参数组
-    bin_configs = [
-        {'bin_length': 400, 'front_bins': 5, 'back_bins': 5, 
-         'coverage_weight_factor': 6, 'similarity_weight_factor': 12},
-        {'bin_length': 1000, 'front_bins': 5, 'back_bins': 5, 
-         'coverage_weight_factor': 5, 'similarity_weight_factor': 10},
-        {'bin_length': 2000, 'front_bins': 5, 'back_bins': 5, 
-         'coverage_weight_factor': 4, 'similarity_weight_factor': 8},
-        {'bin_length': 5000, 'front_bins': 5, 'back_bins': 5, 
-         'coverage_weight_factor': 3, 'similarity_weight_factor': 6},
-        {'bin_length': 10000, 'front_bins': 5, 'back_bins': 5, 
-         'coverage_weight_factor': 2, 'similarity_weight_factor': 4},
-        {'bin_length': 20000, 'front_bins': 5, 'back_bins': 5, 
-         'coverage_weight_factor': 1, 'similarity_weight_factor': 2}
-    ]
-    
-    # 执行连接图构建
-    try:
-        build_connection_graph(
-            contig_file=args.contig_file,
-            partition_file=args.partition_file,
-            alignment_file=args.alignment_file,
-            bin_configs=bin_configs,
-            sorted_connections_file=args.sorted_connections_file,
-            max_connections_file=args.max_connections_file,
-            connection_steps_file=args.connection_steps_file,
-            min_edge_weight=args.min_edge_weight,
-            weight_drop_threshold=args.weight_drop_threshold
-        )
-        logger.info("连接图构建完成!")
-    except Exception as e:
-        logger.error(f"连接图构建过程中发生异常: {str(e)}")
-        sys.exit(1)
 
-def build_connection_graph(contig_file, partition_file, alignment_file, bin_configs,
-                          sorted_connections_file, max_connections_file, 
-                          connection_steps_file, min_edge_weight=20.0, 
-                          weight_drop_threshold=0.3):
-    """构建连接图"""
-    
-    # ================= 数据解析阶段 =================
-    logger.info("======== 开始解析contig文件 ========")
-    contig_dict = parse_contig_file(contig_file)
-    logger.info(f"解析完成，共读取 {len(contig_dict)} 个contig")
+def parse_contig_file(path):
+    contigs, current, length = {}, None, 0
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith(">"):
+                if current:
+                    contigs[current] = length
+                current = line[1:].split()[0]
+                length = 0
+            else:
+                length += len(line)
+    if current:
+        contigs[current] = length
+    return contigs
 
-    logger.info("\n======== 开始解析分区文件 ========")
-    partition_dict = parse_partition_file(partition_file)
-    logger.info(f"解析完成，共读取 {len(partition_dict)} 个分区")
-    for part, contigs in partition_dict.items():
-        logger.info(f"  分区 {part} 包含 {len(contigs)} 个contig编号")
-    
-    logger.info("\n======== 分配contig到分区 ========")
-    contig_to_partition = assign_partitions(contig_dict, partition_dict)
-    for part, contigs in contig_to_partition.items():
-        logger.info(f"  分区 {part} 对应 {len(contigs)} 个contig名称")
-    
-    # 收集所有端点
-    all_endpoints = set()
-    for contigs in contig_to_partition.values():
-        for contig in contigs:
-            all_endpoints.add(f"{contig}_1")
-            all_endpoints.add(f"{contig}_2")
-    logger.info(f"共收集 {len(all_endpoints)} 个端点")
 
-    # ================= 权重计算阶段 =================
-    logger.info("\n======== 开始计算融合权重 ========")
-    total_weights = defaultdict(lambda: defaultdict(float))
-    total_weight_sum = 0
-    
-    for config in bin_configs:
-        logger.info(f"\n处理配置: bin长度={config['bin_length']}，前端bins={config['front_bins']}，"
-                    f"后端bins={config['back_bins']}")
-        logger.info(f"  覆盖权重因子: {config['coverage_weight_factor']}, "
-                    f"相似度权重因子: {config['similarity_weight_factor']}")
-        
-        # 解析比对文件获取覆盖数据
-        coverage_count_dict, coverage_vector_dict = parse_alignment_file(
-            alignment_file,
-            config['bin_length'],
-            config['front_bins'],
-            config['back_bins'],
-            all_endpoints
-        )
-        logger.info(f"  本次解析到 {len(coverage_count_dict)} 个有效测序孔的比对数据")
-        
-        # 生成组合权重
-        config_weights = build_combined_weights(
-            coverage_count_dict, 
-            coverage_vector_dict,
-            config,
-            contig_dict
-        )
-        
-        # 累加权重
-        weight_sum = 0
-        for a in config_weights:
-            for b, w in config_weights[a].items():
-                total_weights[a][b] += w
-                weight_sum += w
-        total_weight_sum += weight_sum
-        logger.info(f"  本配置贡献权重总和: {weight_sum:.2f}")
-    
-    logger.info(f"\n总权重值: {total_weight_sum:.2f}")
+def parse_partition_file(path):
+    partitions = defaultdict(list)
+    with open(path, "r") as f:
+        for line in f:
+            if ":" in line:
+                part, numbers = line.strip().split(":")
+                partitions[part.strip()].extend(numbers.strip().split())
+    return partitions
 
-    # ================= 图构建阶段 =================
-    logger.info("\n======== 开始构建连接图 ========")
-    logger.info(f"总权重条目数: {sum(len(v) for v in total_weights.values())}")
-    
-    logger.info("\n======== 构建连接结构 ========")
-    sorted_connections, max_connections, connection_steps = build_graph(
-        contig_to_partition,
-        [total_weights],
-        contig_dict,
-        min_edge_weight=min_edge_weight,
-        weight_drop_threshold=weight_drop_threshold
-    )
-    logger.info(f"生成 {len(sorted_connections)} 条连接链")
-    logger.info(f"记录 {len(connection_steps)} 个连接步骤")
 
-    # 输出连接类型统计
-    internal_count = sum(1 for _, _, _, conn_type in connection_steps if conn_type == "internal")
-    external_count = sum(1 for _, _, _, conn_type in connection_steps if conn_type == "external")
-    logger.info(f"连接类型统计: {internal_count}个内部连接, {external_count}个外部连接")
+def parse_alignment_file(path, bin_length, front_bins, back_bins, endpoints_set):
+    cov_count = defaultdict(lambda: defaultdict(int))
+    cov_vector = defaultdict(lambda: defaultdict(list))
 
-    # ================= 结果输出阶段 =================
-    logger.info("\n======== 写入输出文件 ========")
-    write_sorted_connections(sorted_connections, sorted_connections_file)
-    logger.info(f"已写入排序连接文件: {sorted_connections_file}")
-    
-    write_max_connections(max_connections, max_connections_file)
-    logger.info(f"已写入最大连接文件: {max_connections_file}")
-    
-    write_connection_steps(connection_steps, connection_steps_file)
-    logger.info(f"已写入连接步骤文件: {connection_steps_file}")
+    for ep in endpoints_set:
+        _, end_type = ep.rsplit("_", 1)
+        cov_vector["_vectors"][ep] = [0] * (front_bins if end_type == "1" else back_bins)
 
-    logger.info("\n======== 运行完成 ========")
-
-def parse_contig_file(contig_file):
-    """解析contig文件，支持多行序列"""
-    logger.info(f"解析contig文件: {contig_file}")
-    contig_dict = {}
-    current_contig = None
-    current_length = 0
-    contig_count = 0
-    total_length = 0
-    
-    try:
-        with open(contig_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('>'):
-                    # 保存前一个contig
-                    if current_contig is not None:
-                        contig_dict[current_contig] = current_length
-                        contig_count += 1
-                        total_length += current_length
-                    
-                    # 新contig
-                    current_contig = line[1:].split()[0]  # 只取第一个单词
-                    current_length = 0
-                else:
-                    # 累加序列长度
-                    current_length += len(line)
-            
-            # 处理最后一个contig
-            if current_contig is not None:
-                contig_dict[current_contig] = current_length
-                contig_count += 1
-                total_length += current_length
-        
-        logger.info(f"解析完成，contig数量: {contig_count}, 总碱基数: {total_length}")
-        return contig_dict
-        
-    except Exception as e:
-        logger.error(f"解析contig文件时出错: {str(e)}")
-        raise
-
-def parse_partition_file(partition_file):
-    """解析分区文件"""
-    logger.info(f"解析分区文件: {partition_file}")
-    partition_dict = defaultdict(list)
-    partition_count = 0
-    total_contigs = 0
-    
-    try:
-        with open(partition_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                if ':' in line:
-                    parts = line.split(':')
-                    partition = parts[0].strip()
-                    contig_numbers = parts[1].strip().split()
-                    partition_dict[partition].extend(contig_numbers)
-                    partition_count += 1
-                    total_contigs += len(contig_numbers)
-        
-        logger.info(f"解析完成，分区数量: {partition_count}, 总contig编号数: {total_contigs}")
-        return partition_dict
-        
-    except Exception as e:
-        logger.error(f"解析分区文件时出错: {str(e)}")
-        raise
-
-def parse_alignment_file(alignment_file, bin_length, front_bins, back_bins, endpoints_set):
-    """解析比对文件，返回覆盖计数和覆盖向量"""
-    logger.info(f"解析比对文件: {alignment_file}")
-    logger.debug(f"参数: bin长度={bin_length}, 前端bins={front_bins}, 后端bins={back_bins}")
-    
-    # 覆盖计数字典 {测序孔: {端点: 覆盖bin总数}}
-    coverage_count_dict = defaultdict(lambda: defaultdict(int))
-    
-    # 覆盖向量字典 {测序孔: {端点: [bin覆盖向量]}}
-    coverage_vector_dict = defaultdict(lambda: defaultdict(list))
-    
-    # 初始化向量字典
-    for endpoint in endpoints_set:
-        contig_name, end_type = endpoint.rsplit('_', 1)
-        if end_type == '1':
-            coverage_vector_dict['_vectors'][endpoint] = [0] * front_bins
-        else:
-            coverage_vector_dict['_vectors'][endpoint] = [0] * back_bins
-    
     current_pore = None
-    pore_count = 0
-    alignment_count = 0
-
-    try:
-        with open(alignment_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-
-                if line.endswith(':') and len(line.split()) == 1:
-                    current_pore = line[:-1].strip()
-                    pore_count += 1
-                    continue
-
-                if current_pore is None:
-                    continue
-
-                parts = line.split(',')
-                if len(parts) < 5:
-                    continue
-
-                try:
-                    contig_name = parts[0].replace(':', '').strip()
-                    contig_length = int(parts[1])
-                    start = int(parts[2])
-                    end = int(parts[3])
-                    alignment_count += 1
-                except (ValueError, IndexError):
-                    continue
-
-                endpoint1 = f"{contig_name}_1"
-                endpoint2 = f"{contig_name}_2"
-                
-                # 处理前端区域
-                if endpoint1 in endpoints_set:
-                    front_end = min(front_bins * bin_length, contig_length)
-                    overlap_start = max(start, 0)
-                    overlap_end = min(end, front_end)
-                    
-                    if overlap_start < overlap_end:
-                        # 计算覆盖的bin
-                        start_bin = overlap_start // bin_length
-                        end_bin = min((overlap_end - 1) // bin_length, front_bins - 1)
-                        bin_count = max(0, end_bin - start_bin + 1)
-                        
-                        # 更新覆盖计数
-                        coverage_count_dict[current_pore][endpoint1] += bin_count
-                        
-                        # 更新覆盖向量
-                        for bin_idx in range(start_bin, end_bin + 1):
-                            if bin_idx < front_bins:
-                                coverage_vector_dict[current_pore][endpoint1].append(bin_idx)
-                
-                # 处理后端区域
-                if endpoint2 in endpoints_set:
-                    back_start = max(0, contig_length - back_bins * bin_length)
-                    overlap_start = max(start, back_start)
-                    overlap_end = min(end, contig_length)
-                    
-                    if overlap_start < overlap_end:
-                        # 计算覆盖的bin
-                        start_bin = max(0, (overlap_start - back_start) // bin_length)
-                        end_bin = min((overlap_end - back_start - 1) // bin_length, back_bins - 1)
-                        bin_count = max(0, end_bin - start_bin + 1)
-                        
-                        # 更新覆盖计数
-                        coverage_count_dict[current_pore][endpoint2] += bin_count
-                        
-                        # 更新覆盖向量
-                        for bin_idx in range(start_bin, end_bin + 1):
-                            if bin_idx < back_bins:
-                                coverage_vector_dict[current_pore][endpoint2].append(bin_idx)
-        
-        logger.info(f"解析完成，测序孔数量: {pore_count}, 比对记录数: {alignment_count}")
-        
-        # 转换覆盖列表为二进制向量
-        logger.debug("转换覆盖列表为二进制向量...")
-        for pore in list(coverage_vector_dict.keys()):
-            if pore == '_vectors':
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
                 continue
-                
-            for endpoint, bin_list in coverage_vector_dict[pore].items():
-                vec_len = len(coverage_vector_dict['_vectors'][endpoint])
-                binary_vec = [0] * vec_len
-                for bin_idx in set(bin_list):
-                    if bin_idx < vec_len:
-                        binary_vec[bin_idx] = 1
-                coverage_vector_dict[pore][endpoint] = binary_vec
-        
-        return coverage_count_dict, coverage_vector_dict
-        
-    except Exception as e:
-        logger.error(f"解析比对文件时出错: {str(e)}")
-        raise
+            if line.endswith(":") and len(line.split()) == 1:
+                current_pore = line[:-1].strip()
+                continue
+            if not current_pore:
+                continue
 
-def calculate_cosine_similarity(vec1, vec2):
-    """计算两个向量的余弦相似度"""
-    if len(vec1) != len(vec2):
-        # 如果向量长度不一致，用零填充较短的向量
-        max_len = max(len(vec1), len(vec2))
-        vec1 = list(vec1) + [0] * (max_len - len(vec1))
-        vec2 = list(vec2) + [0] * (max_len - len(vec2))
-    
-    dot_product = np.dot(vec1, vec2)
-    norm1 = np.linalg.norm(vec1)
-    norm2 = np.linalg.norm(vec2)
-    
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    
-    similarity = dot_product / (norm1 * norm2)
-    return max(0.0, similarity)  # 只返回非负值
+            parts = line.split(",")
+            if len(parts) != 5:
+                continue
+            try:
+                name = parts[0].replace(":", "")
+                length, start, end = int(parts[1]), int(parts[2]), int(parts[3])
+            except ValueError:
+                continue
 
-def build_combined_weights(coverage_count_dict, coverage_vector_dict, config, contig_dict):
-    """结合覆盖计数和余弦相似度的权重计算"""
-    logger.debug("构建组合权重...")
+            # 处理前端和后端
+            if f"{name}_1" in endpoints_set:
+                front_end = min(front_bins * bin_length, length)
+                overlap_start = max(start, 0)
+                overlap_end = min(end, front_end)
+                if overlap_start < overlap_end:
+                    s_bin = overlap_start // bin_length
+                    e_bin = min((overlap_end - 1) // bin_length, front_bins - 1)
+                    bin_count = max(0, e_bin - s_bin + 1)
+                    cov_count[current_pore][f"{name}_1"] += bin_count
+                    for b in range(s_bin, e_bin + 1):
+                        if 0 <= b < front_bins:
+                            cov_vector[current_pore][f"{name}_1"].append(b)
+
+            if f"{name}_2" in endpoints_set:
+                back_start = max(0, length - back_bins * bin_length)
+                overlap_start = max(start, back_start)
+                overlap_end = min(end, length)
+                if overlap_start < overlap_end:
+                    s_bin = max(0, (overlap_start - back_start) // bin_length)
+                    e_bin = min((overlap_end - back_start - 1) // bin_length, back_bins - 1)
+                    bin_count = max(0, e_bin - s_bin + 1)
+                    cov_count[current_pore][f"{name}_2"] += bin_count
+                    for b in range(s_bin, e_bin + 1):
+                        if 0 <= b < back_bins:
+                            cov_vector[current_pore][f"{name}_2"].append(b)
+
+    for pore, eps in cov_vector.items():
+        if pore == "_vectors":
+            continue
+        for ep, bins in eps.items():
+            vec_len = len(cov_vector["_vectors"][ep])
+            vec = [0] * vec_len
+            for b in set(bins):
+                if b < vec_len:
+                    vec[b] = 1
+            cov_vector[pore][ep] = vec
+    return cov_count, cov_vector
+
+
+def calculate_cosine_similarity(v1, v2):
+    if len(v1) != len(v2):
+        m = max(len(v1), len(v2))
+        v1 = list(v1) + [0] * (m - len(v1))
+        v2 = list(v2) + [0] * (m - len(v2))
+    dot = np.dot(v1, v2)
+    n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+    return 0.0 if n1 == 0 or n2 == 0 else max(0.0, dot / (n1 * n2))
+
+
+# ====================== 权重计算阶段 ======================
+
+def build_similarity_weights(cov_vector_dict, cfg):
     weights = defaultdict(lambda: defaultdict(float))
-    total_edges = 0
-    coverage_weight_total = 0.0
-    similarity_weight_total = 0.0
-    
-    # 提取向量字典
-    vector_dict = coverage_vector_dict.get('_vectors', {})
-    
-    for pore in set(coverage_count_dict.keys()) | set(coverage_vector_dict.keys()):
-        if pore == '_vectors':
+    for pore, eps in cov_vector_dict.items():
+        if pore == "_vectors":
             continue
-        
-        # 获取当前测序孔的覆盖计数数据
-        coverage_counts = coverage_count_dict.get(pore, {})
-        
-        # 获取当前测序孔的覆盖向量数据
-        vector_data = coverage_vector_dict.get(pore, {})
-        
-        # 过滤低质量测序孔
-        total_coverage = sum(coverage_counts.values()) + sum(sum(v) for v in vector_data.values())
-        if total_coverage < 10:
-            continue
-        
-        endpoints = list(set(coverage_counts.keys()) | set(vector_data.keys()))
-        
-        # 计算所有端点对的权重
-        for i, a in enumerate(endpoints):
-            for j in range(i+1, len(endpoints)):
-                b = endpoints[j]
-                total_edges += 1
-                
-                # 计算覆盖计数权重
-                coverage_weight = 0.0
-                count_a = coverage_counts.get(a, 0)
-                count_b = coverage_counts.get(b, 0)
-                if count_a > 0 and count_b > 0:
-                    coverage_weight = math.sqrt(count_a * count_b) * config['coverage_weight_factor']
-                    coverage_weight_total += coverage_weight
-                
-                # 计算余弦相似度权重
-                similarity_weight = 0.0
-                if a in vector_data and b in vector_data:
-                    vec_a = np.array(vector_data[a])
-                    vec_b = np.array(vector_data[b])
-                    
-                    # 确保向量长度一致
-                    if len(vec_a) != len(vec_b):
-                        max_len = max(len(vec_a), len(vec_b))
-                        vec_a = np.pad(vec_a, (0, max_len - len(vec_a)), 'constant')
-                        vec_b = np.pad(vec_b, (0, max_len - len(vec_b)), 'constant')
-                    
-                    similarity = calculate_cosine_similarity(vec_a, vec_b)
-                    similarity_weight = similarity * config['similarity_weight_factor']
-                    similarity_weight_total += similarity_weight
-                
-                # 组合权重
-                total_weight = coverage_weight + similarity_weight
-                if total_weight > 0:
-                    weights[a][b] += total_weight
-                    weights[b][a] += total_weight
-    
-    logger.debug(f"权重计算完成，总端点对: {total_edges}")
-    logger.debug(f"覆盖权重总和: {coverage_weight_total:.2f}, 相似度权重总和: {similarity_weight_total:.2f}")
+        keys = list(eps.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                a, b = keys[i], keys[j]
+                sim = calculate_cosine_similarity(eps[a], eps[b])
+                if sim > 0:
+                    w = sim * cfg["similarity_weight_factor"]
+                    weights[a][b] += w
+                    weights[b][a] += w
     return weights
 
+
+def build_coverage_weights(cov_count_dict, cfg):
+    weights = defaultdict(lambda: defaultdict(float))
+    for pore, eps in cov_count_dict.items():
+        keys = list(eps.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                a, b = keys[i], keys[j]
+                ca, cb = eps[a], eps[b]
+                if ca > 0 and cb > 0:
+                    w = math.sqrt(ca * cb) * cfg["coverage_weight_factor"]
+                    weights[a][b] += w
+                    weights[b][a] += w
+    return weights
+
+
 def assign_partitions(contig_dict, partition_dict):
-    """分配contig到分区"""
-    logger.info("分配contig到分区...")
-    contig_to_partition = defaultdict(list)
-    matched_count = 0
-    unmatched_numbers = []
-    
-    for partition, numbers in partition_dict.items():
-        for number in numbers:
-            matched = False
+    mapping = defaultdict(list)
+    contig_to_number = {}  # 新增：contig到数字的映射
+    for part, nums in partition_dict.items():
+        for n in nums:
             for contig in contig_dict:
-                if contig.endswith(f"_{number}"):
-                    contig_to_partition[partition].append(contig)
-                    matched = True
-                    matched_count += 1
+                if contig.endswith(f"_{n}"):
+                    mapping[part].append(contig)
+                    contig_to_number[contig] = n  # 记录映射
                     break
-            if not matched:
-                unmatched_numbers.append(number)
-    
-    if unmatched_numbers:
-        logger.warning(f"警告: {len(unmatched_numbers)}个分区编号未找到对应的contig")
-    
-    logger.info(f"匹配完成，成功匹配 {matched_count} 个contig")
-    return contig_to_partition
+    return mapping, contig_to_number  # 返回映射关系
+
 
 def is_same_contig(a, b):
-    return a.rsplit('_', 1)[0] == b.rsplit('_', 1)[0]
+    return a.rsplit("_", 1)[0] == b.rsplit("_", 1)[0]
 
-def build_graph(contig_to_partition, all_weights_list, contig_dict, 
-               min_edge_weight=20.0, weight_drop_threshold=0.3):
-    """构建连接图"""
-    logger.info("构建连接图...")
+
+# ====================== 基于权重构建图（阶段性使用） ======================
+
+def build_graph(contig_to_partition, weights_list, contig_dict,
+                weight_drop_threshold=0.3, min_edge_weight=20):
     sorted_connections = {}
-    max_connections = {}
     connection_steps = []
-    total_edges_added = 0
-    total_chains = 0
-    
-    # 调试信息：记录被过滤的边
-    filtered_edges = defaultdict(list)
 
     for partition, contigs in contig_to_partition.items():
-        logger.debug(f"处理分区: {partition}")
         endpoints = []
         for contig in contigs:
             endpoints.extend([f"{contig}_1", f"{contig}_2"])
@@ -524,69 +231,43 @@ def build_graph(contig_to_partition, all_weights_list, contig_dict,
         uf = UnionFind()
         graph = defaultdict(list)
         for endpoint in endpoints:
-            uf.add(endpoint)
+            uf.parent[endpoint] = endpoint
             graph[endpoint] = []
 
-        # 内部连接部分 - 使用固定高权重确保内部连接优先
+        # 内部连接
         for contig in contigs:
-            end3 = f"{contig}_1"
-            end5 = f"{contig}_2"
-            internal_weight = 100000.0
-            graph[end3].append((end5, internal_weight))
-            graph[end5].append((end3, internal_weight))
-            uf.union(end3, end5)
-            # 标记内部连接
-            connection_steps.append((end3, end5, internal_weight, "internal"))
+            e1 = f"{contig}_1"
+            e2 = f"{contig}_2"
+            uf.union(e1, e2)
+            graph[e1].append((e2, 100000.0))
+            graph[e2].append((e1, 100000.0))
+            connection_steps.append((e1, e2, 100000.0, "internal"))
 
-        # 外部连接部分 - 修复权重过滤问题
-        external_edges = []
-        total_possible_edges = 0
-        filtered_low_weight = 0
-        
-        # 遍历所有权重源
-        for weights in all_weights_list:
+        # 收集外部边（来自所有weights）
+        all_edges = []
+        for weights in weights_list:
             for a in endpoints:
                 for b, w in weights.get(a, {}).items():
-                    # 只考虑分区内的端点
                     if b not in endpoints:
                         continue
-                        
-                    total_possible_edges += 1
-                    
-                    # 跳过同一个contig的端点（内部边已处理）
                     if is_same_contig(a, b):
                         continue
-                    
-                    # 严格过滤权重
                     if w < min_edge_weight:
-                        filtered_low_weight += 1
-                        filtered_edges[(a, b)].append(w)
                         continue
-                    
-                    # 标准化边方向
                     if a < b:
                         edge = (a, b, w)
                     else:
                         edge = (b, a, w)
-                    external_edges.append(edge)
-        
-        # 调试输出
-        logger.debug(f"分区 {partition}:")
-        logger.debug(f"  总可能边数: {total_possible_edges}")
-        logger.debug(f"  过滤的低权重边数: {filtered_low_weight}")
-        logger.debug(f"  保留的边数: {len(external_edges)}")
-        
-        # 去除重复边并保留最大权重
+                    all_edges.append(edge)
+
+        # 去重保留最大
         edge_dict = {}
-        for a, b, w in external_edges:
+        for a, b, w in all_edges:
             key = (a, b)
-            if key in edge_dict:
-                if w > edge_dict[key]:
-                    edge_dict[key] = w
-            else:
+            if key not in edge_dict or w > edge_dict[key]:
                 edge_dict[key] = w
-        
-        # 使用最大堆处理边
+
+        # 使用堆按权重从大到小添加
         from heapq import heappush, heappop
         heap = []
         for (a, b), w in edge_dict.items():
@@ -594,34 +275,22 @@ def build_graph(contig_to_partition, all_weights_list, contig_dict,
 
         edges_added = 0
         while heap:
-            w_neg, a, b = heappop(heap)
-            w = -w_neg
-            
-            # 再次检查权重阈值（冗余检查）
-            if w < min_edge_weight:
-                continue
-                
-            # 连接条件检查
+            wneg, a, b = heappop(heap)
+            w = -wneg
             if len(graph[a]) < 2 and len(graph[b]) < 2 and uf.find(a) != uf.find(b):
                 if uf.union(a, b):
                     graph[a].append((b, w))
                     graph[b].append((a, w))
-                    # 标记外部连接
                     connection_steps.append((a, b, w, "external"))
                     edges_added += 1
-                    total_edges_added += 1
-        
-        logger.debug(f"  实际添加的边数: {edges_added}")
 
-        # 生成链结构
+        # 生成链（含断链判断）
         components = defaultdict(list)
-        for endpoint in endpoints:
-            root = uf.find(endpoint)
-            components[root].append(endpoint)
+        for ep in endpoints:
+            components[uf.find(ep)].append(ep)
 
         chain_id = 1
         for root, members in components.items():
-            # 找到起点（度数小于2的端点）
             start_node = None
             for node in members:
                 if len(graph[node]) < 2:
@@ -630,110 +299,313 @@ def build_graph(contig_to_partition, all_weights_list, contig_dict,
             if not start_node:
                 start_node = members[0]
 
-            # 深度优先遍历生成链
             visited = set()
-            chain = []
             stack = [start_node]
-            
+            chain = []
             while stack:
                 current = stack.pop()
                 if current in visited:
                     continue
                 visited.add(current)
                 chain.append(current)
-                
-                # 获取邻居并按权重降序排序
                 neighbors = sorted(graph[current], key=lambda x: x[1], reverse=True)
-                for neighbor, _ in neighbors:
+                for neighbor, _w in neighbors:
                     if neighbor not in visited:
                         stack.append(neighbor)
 
-            # 权重下降断开检查
+            # 权重下降断开
             split_indices = []
             prev_weight = None
-            for i in range(len(chain)-1):
-                a, b = chain[i], chain[i+1]
-                
-                # 查找实际权重
-                current_weight = 0
+            for i in range(len(chain) - 1):
+                a, b = chain[i], chain[i + 1]
+                cur_w = 0.0
                 for n, w in graph[a]:
                     if n == b:
-                        current_weight = w
+                        cur_w = w
                         break
-                
-                # 跳过内部连接
                 if is_same_contig(a, b):
                     prev_weight = None
                     continue
-                
-                # 检查权重下降
-                if prev_weight and current_weight < prev_weight * weight_drop_threshold:
+                if prev_weight and cur_w < prev_weight * weight_drop_threshold:
                     split_indices.append(i)
                     prev_weight = None
                 else:
-                    prev_weight = current_weight
+                    prev_weight = cur_w
 
-            # 分割链
-            split_points = [0] + [i+1 for i in split_indices] + [len(chain)]
-            sub_chains = [chain[start:end] for start, end in zip(split_points[:-1], split_points[1:])]
-
-            # 记录结果
-            for sub_chain in sub_chains:
-                if len(sub_chain) < 2: 
+            split_points = [0] + [i + 1 for i in split_indices] + [len(chain)]
+            for s, e in zip(split_points[:-1], split_points[1:]):
+                sub_chain = chain[s:e]
+                if len(sub_chain) < 2:
                     continue
-                    
-                partition_name = f"{partition}_{chain_id}"
-                sorted_connections[partition_name] = sub_chain
+                sorted_connections[f"{partition}_{chain_id}"] = sub_chain
                 chain_id += 1
-                total_chains += 1
 
-                # 记录最大连接
-                for endpoint in sub_chain:
-                    max_conn = None
-                    max_w = 0
-                    for n, w in graph[endpoint]:
-                        # 只考虑外部连接
-                        if not is_same_contig(endpoint, n) and w > max_w:
-                            max_conn = n
-                            max_w = w
-                    max_connections[endpoint] = max_conn
+    return sorted_connections, connection_steps
 
-    # 输出过滤的边信息
-    if filtered_edges:
-        logger.debug("\n被过滤的低权重边统计:")
-        for (a, b), weights in filtered_edges.items():
-            avg_weight = sum(weights) / len(weights)
-            logger.debug(f"  {a} - {b}: 平均权重 {avg_weight:.2f} (阈值 {min_edge_weight})")
-    
-    logger.info(f"总添加边数: {total_edges_added}, 总链数: {total_chains}")
-    return sorted_connections, max_connections, connection_steps
 
-def write_sorted_connections(sorted_connections, output_file):
-    """写入排序连接文件"""
-    logger.info(f"写入排序连接文件: {output_file}")
-    with open(output_file, 'w') as f:
-        for partition, connections in sorted_connections.items():
-            line = f"{partition}: {' '.join(connections)}"
-            f.write(line + '\n')
+# ====================== 将两阶段边合并并生成最终链 ======================
 
-def write_max_connections(max_connections, output_file):
-    """写入最大连接文件"""
-    logger.info(f"写入最大连接文件: {output_file}")
-    with open(output_file, 'w') as f:
-        for endpoint, max_conn in max_connections.items():
-            line = f"{endpoint} -> {max_conn if max_conn else 'None'}\n"
-            f.write(line)
+def finalize_chains(contig_to_partition, sim_steps, cov_steps, cfg):
+    sorted_connections = {}
+    all_steps = []
 
-def write_connection_steps(connection_steps, output_file):
-    """写入连接步骤文件"""
-    logger.info(f"写入连接步骤文件: {output_file}")
-    with open(output_file, 'w') as f:
-        for a, b, w, conn_type in connection_steps:
-            # 仅输出外部连接或权重>=500的连接
-            if conn_type == "external" and w < 1.0:
+    for partition, contigs in contig_to_partition.items():
+        endpoints = []
+        for contig in contigs:
+            endpoints.extend([f"{contig}_1", f"{contig}_2"])
+
+        uf = UnionFind()
+        graph = defaultdict(list)
+        for ep in endpoints:
+            uf.parent[ep] = ep
+            graph[ep] = []
+
+        # 添加内部连接
+        for contig in contigs:
+            e1 = f"{contig}_1"; e2 = f"{contig}_2"
+            uf.union(e1, e2)
+            graph[e1].append((e2, 100000.0))
+            graph[e2].append((e1, 100000.0))
+            all_steps.append((e1, e2, 100000.0, "internal"))
+
+        # 添加相似度阶段的外部边
+        for a, b, w, t in sim_steps:
+            if t != "external":
                 continue
-            line = f"{a} - {b}: {w:.2f} ({conn_type})\n"
-            f.write(line)
+            if a in endpoints and b in endpoints:
+                if is_same_contig(a, b):
+                    continue
+                boosted = w + cfg.get("similarity_boost", 0.0)
+                graph[a].append((b, boosted))
+                graph[b].append((a, boosted))
+                all_steps.append((a, b, boosted, "sim_external"))
+
+        # 添加覆盖度阶段的外部边
+        for a, b, w, t in cov_steps:
+            if t != "external":
+                continue
+            if a in endpoints and b in endpoints:
+                if is_same_contig(a, b):
+                    continue
+                graph[a].append((b, w))
+                graph[b].append((a, w))
+                all_steps.append((a, b, w, "cov_external"))
+
+        # 去重并选取最大权重边
+        edge_dict = {}
+        for a in endpoints:
+            for b, w in graph[a]:
+                if b not in endpoints:
+                    continue
+                if is_same_contig(a, b):
+                    continue
+                key = tuple(sorted((a, b)))
+                if key not in edge_dict or w > edge_dict[key]:
+                    edge_dict[key] = w
+
+        # 使用最大堆构建最终图
+        from heapq import heappush, heappop
+        heap = []
+        for (a, b), w in edge_dict.items():
+            heappush(heap, (-w, a, b))
+
+        graph_out = defaultdict(list)
+        for ep in endpoints:
+            graph_out[ep] = []
+        for contig in contigs:
+            e1 = f"{contig}_1"; e2 = f"{contig}_2"
+            graph_out[e1].append((e2, 100000.0))
+            graph_out[e2].append((e1, 100000.0))
+
+        while heap:
+            wneg, a, b = heappop(heap)
+            w = -wneg
+            if len(graph_out[a]) < 2 and len(graph_out[b]) < 2 and uf.find(a) != uf.find(b):
+                if uf.union(a, b):
+                    graph_out[a].append((b, w))
+                    graph_out[b].append((a, w))
+
+        # 生成链并断链
+        comps = defaultdict(list)
+        for ep in endpoints:
+            comps[uf.find(ep)].append(ep)
+
+        cid = 1
+        for root, members in comps.items():
+            start = next((n for n in members if len(graph_out[n]) < 2), members[0])
+            visited, stack, chain = set(), [start], []
+            while stack:
+                cur = stack.pop()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                chain.append(cur)
+                for n, _w in sorted(graph_out[cur], key=lambda x: x[1], reverse=True):
+                    if n not in visited:
+                        stack.append(n)
+
+            # 权重下降断开
+            split_indices = []
+            prev_w = None
+            for i in range(len(chain) - 1):
+                a, b = chain[i], chain[i + 1]
+                cur_w = next((w for n, w in graph_out[a] if n == b), 0.0)
+                if is_same_contig(a, b):
+                    prev_w = None
+                    continue
+                if prev_w and cur_w < prev_w * cfg["weight_drop_threshold"]:
+                    split_indices.append(i)
+                    prev_w = None
+                else:
+                    prev_w = cur_w
+
+            split_points = [0] + [i + 1 for i in split_indices] + [len(chain)]
+            for s, e in zip(split_points[:-1], split_points[1:]):
+                sub = chain[s:e]
+                if len(sub) >= 2:
+                    sorted_connections[f"{partition}_{cid}"] = sub
+                    cid += 1
+
+    return sorted_connections, all_steps
+
+
+# ====================== 输出函数 ======================
+
+def write_connections(connections, path):
+    with open(path, "w") as f:
+        for part, chain in connections.items():
+            f.write(f"{part}: {' '.join(chain)}\n")
+
+
+def write_contig_weights(contig_weights, path):
+    """输出contig权重文件"""
+    with open(path, "w") as f:
+        for (contig1, contig2), weight in contig_weights.items():
+            f.write(f"{contig1} {contig2} {weight:.2f}\n")
+
+
+# ====================== 主流程 ======================
+
+def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='Binpai4: 基因组scaffolding算法')
+    
+    # 必需参数
+    parser.add_argument('contig_file', help='Contig文件路径')
+    parser.add_argument('partition_file', help='分区文件路径')
+    parser.add_argument('alignment_file', help='比对文件路径')
+    parser.add_argument('output_final_links', help='最终连接输出文件路径')
+    parser.add_argument('output_contig_weights', help='Contig权重输出文件路径')
+    
+    # 可选参数
+    parser.add_argument('--min_edge_weight', type=float, default=10.0,
+                       help='最小边权重阈值 (默认: 10.0)')
+    parser.add_argument('--weight_drop_threshold', type=float, default=0.3,
+                       help='权重下降阈值 (默认: 0.3)')
+    
+    args = parser.parse_args()
+    
+    # 更新配置
+    cfg = CONFIG.copy()
+    cfg.update({
+        "contig_file": args.contig_file,
+        "partition_file": args.partition_file,
+        "alignment_file": args.alignment_file,
+        "output_final_links": args.output_final_links,
+        "output_contig_weights": args.output_contig_weights,
+        "min_edge_weight_similarity": args.min_edge_weight,
+        "min_edge_weight_coverage": args.min_edge_weight,
+        "weight_drop_threshold": args.weight_drop_threshold
+    })
+    
+    start_time = time.time()
+
+    # 检查输入文件
+    for p in [cfg["contig_file"], cfg["partition_file"], cfg["alignment_file"]]:
+        if not os.path.exists(p):
+            print(f"错误: 输入文件不存在 {p}")
+            return
+
+    print("解析contig和partition...")
+    contigs = parse_contig_file(cfg["contig_file"])
+    partitions = parse_partition_file(cfg["partition_file"])
+    mapping, contig_to_number = assign_partitions(contigs, partitions)  # 获取映射关系
+    endpoints = set(f"{c}_{i}" for cs in mapping.values() for c in cs for i in [1, 2])
+
+    # 阶段1：相似度权重
+    sim_total = defaultdict(lambda: defaultdict(float))
+    for bc in cfg["bin_configs"]:
+        cc, cv = parse_alignment_file(cfg["alignment_file"], bc["bin_length"], bc["front_bins"], bc["back_bins"], endpoints)
+        sw = build_similarity_weights(cv, bc)
+        for a in sw:
+            for b, w in sw[a].items():
+                sim_total[a][b] += w
+
+    print("阶段1：按相似度生成初步连接...")
+    sim_conn, sim_steps = build_graph(mapping, [sim_total], contigs,
+                                      cfg["weight_drop_threshold"], cfg["min_edge_weight_similarity"])
+
+    # 阶段2：覆盖度权重
+    cov_total = defaultdict(lambda: defaultdict(float))
+    for bc in cfg["bin_configs"]:
+        cc, cv = parse_alignment_file(cfg["alignment_file"], bc["bin_length"], bc["front_bins"], bc["back_bins"], endpoints)
+        cw = build_coverage_weights(cc, bc)
+        for a in cw:
+            for b, w in cw[a].items():
+                cov_total[a][b] += w
+
+    print("阶段2：按覆盖度生成补全连接...")
+    cov_conn, cov_steps = build_graph(mapping, [cov_total], contigs,
+                                      cfg["weight_drop_threshold"], cfg["min_edge_weight_coverage"])
+
+    # 最终合并
+    print("合并两阶段边并生成最终链...")
+    final_conn, final_steps = finalize_chains(mapping, sim_steps, cov_steps, cfg)
+    write_connections(final_conn, cfg["output_final_links"])
+    print(f"已写出最终链 -> {cfg['output_final_links']}")
+
+    # 新增：计算并输出contig权重
+    print("计算contig权重...")
+    contig_weights = defaultdict(float)
+    
+    # 合并相似度和覆盖度权重
+    for a in endpoints:
+        for b in endpoints:
+            if a >= b:  # 避免重复计算
+                continue
+            total_weight = sim_total[a].get(b, 0.0) + cov_total[a].get(b, 0.0)
+            if total_weight > 0:
+                # 提取contig名称（去掉端点标识）
+                contig_a = a.rsplit('_', 1)[0]
+                contig_b = b.rsplit('_', 1)[0]
+                
+                # 如果同一个contig的不同端点，跳过
+                if contig_a == contig_b:
+                    continue
+                
+                # 获取contig对应的数字编号
+                num_a = contig_to_number.get(contig_a)
+                num_b = contig_to_number.get(contig_b)
+                
+                if num_a and num_b:
+                    # 确保小的数字在前
+                    if num_a > num_b:
+                        num_a, num_b = num_b, num_a
+                    key = (num_a, num_b)
+                    contig_weights[key] += total_weight
+
+    # 输出contig权重文件
+    write_contig_weights(contig_weights, cfg["output_contig_weights"])
+    print(f"已写出contig权重 -> {cfg['output_contig_weights']}")
+
+    # 计算运行时间
+    end_time = time.time()
+    total_time = end_time - start_time
+    minutes = int(total_time // 60)
+    seconds = total_time % 60
+    
+    print("完成 ✅")
+    print(f"总运行时间: {minutes}分{seconds:.2f}秒")
 
 if __name__ == "__main__":
     main()

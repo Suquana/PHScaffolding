@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 def main():
-    # 创建解析器时不禁止默认帮助
+    # 创建解析器
     parser = argparse.ArgumentParser(
         description='Scaffolding Pipeline: Automated genome scaffolding workflow',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -27,10 +27,17 @@ def main():
                         help='Weight drop threshold for binpai4.py (default: %(default)s)')
     parser.add_argument('-r', type=float, default=1.0, 
                         help='Resolution parameter for chaobian5.py (Louvain algorithm) (default: %(default)s)')
-    parser.add_argument('--gap', type=int, default=500, 
-                        help='Number of Ns between contigs in scaffold sequences (default: %(default)s)')
     
-    # 解析参数
+    # 修改：lianjie1.py的参数，使用-s和-e
+    parser.add_argument('-s', '--alpha', type=float, default=0.4431,
+                       help='Power law alpha parameter for lianjie1.py (默认: %(default)s)')
+    parser.add_argument('-e', '--beta', type=float, default=4.0218,
+                       help='Power law beta parameter for lianjie1.py (默认: %(default)s)')
+    parser.add_argument('--max_gap', type=int, default=100,
+                       help='Maximum gap length for lianjie1.py (默认: %(default)s)')
+    parser.add_argument('--min_gap', type=int, default=1,
+                       help='Minimum gap length for lianjie1.py (默认: %(default)s)')
+    
     args = parser.parse_args()
     
     # 创建输出目录
@@ -89,25 +96,23 @@ def main():
     juzhen_out = os.path.join(args.output_dir, "juzhen.txt")
     chaobian_cmd = [
         "python", "chaobian5.py",
-        chap_out,
-        chaotu_out,
-        juzhen_out,
-        "--resolution", str(args.r)
+        "-i", chap_out,        # 输入文件
+        "-o", chaotu_out,      # 聚类输出文件
+        "-c", juzhen_out,      # 连接强度文件
+        "-r", str(args.r)      # 分辨率参数
     ]
     run_command(chaobian_cmd, "chaobian5.py")
     
     # binpai4.py 处理
     out_txt = os.path.join(args.output_dir, "out.txt")
     link1_txt = os.path.join(args.output_dir, "link1.txt")
-    link2_txt = os.path.join(args.output_dir, "link2.txt")
     binpai_cmd = [
         "python", "binpai4.py",
-        line_out,
-        chaotu_out,
-        tiqu_out,
-        out_txt,
-        link1_txt,
-        link2_txt,
+        line_out,           # contig文件
+        chaotu_out,         # partition文件
+        tiqu_out,          # alignment文件
+        out_txt,           # 最终连接输出
+        link1_txt,         # contig权重输出
         "--min_edge_weight", str(args.min_w),
         "--weight_drop_threshold", str(args.drop_w)
     ]
@@ -118,14 +123,18 @@ def main():
     # ======================
     print("\n=== Step 3: Scaffold Generation ===")
     
-    # lianjie1.py 处理
+    # lianjie1.py 处理 - 使用新的参数格式
     scaffold_out = os.path.join(args.output_dir, "scaffold.fasta")
     lianjie_cmd = [
         "python", "lianjie1.py",
-        args.contig,
-        out_txt,
-        scaffold_out,
-        "--gap_length", str(args.gap)
+        args.contig,        # contig文件
+        out_txt,           # 顺序文件
+        link1_txt,         # 权重文件
+        scaffold_out,       # 输出文件
+        "-s", str(args.alpha),  # 使用-s参数
+        "-e", str(args.beta),   # 使用-e参数
+        "--max_gap", str(args.max_gap),
+        "--min_gap", str(args.min_gap)
     ]
     run_command(lianjie_cmd, "lianjie1.py")
     
